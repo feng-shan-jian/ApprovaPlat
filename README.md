@@ -1,6 +1,6 @@
 # ApprovaPlat
 
-基于 RuoYi、Flowable 8、Spring Boot 4 和 Vue 3 的开源审批中台。
+基于 RuoYi、Flowable 8、Spring Boot 4 和 Vue 3 的开源B端流程中后台。
 
 覆盖流程设计、发布、发起、办理、权限、数据与审计。
 
@@ -18,7 +18,7 @@
 
 ## 项目简介
 
-ApprovaPlat 是一套基于 Flowable 8 的审批系统实现。
+ApprovaPlat 是一套基于 Flowable 8 的中后台系统实现。
 
 目前已经跑通：
 
@@ -31,11 +31,11 @@ ApprovaPlat 是一套基于 Flowable 8 的审批系统实现。
   → 历史与审计
 ```
 
-流程、表单、权限、业务数据和运行状态统一在项目中维护，可用于 Flowable 8 学习、审批系统开发和二次开发参考。
+流程、表单、权限、业务数据和运行状态统一在项目中维护，可用于 Flowable 8 学习、流程系统开发和二次开发参考。
 
 ## 为什么做这个项目
 
-我在一次 B 端 中后台 产品实习中接触到企业审批，也开始关注一套生产级中后台是怎样把流程、表单、权限和业务数据串起来的。
+我在一次 B 端中后台产品设计与全栈实习中接触到制造业复杂业务场景，也开始关注一套生产级中后台是怎样把极其复杂的业务流程、表单、权限和业务数据需求转化为功能并使用技术串起来的。
 
 在调研 [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue)、[芋道](https://github.com/YunaiV/ruoyi-vue-pro)、[Flowable](https://github.com/flowable/flowable-engine) 和 [bpmn.io](https://github.com/bpmn-io/bpmn-js) 等项目后，我希望建立一套技术栈较新、开放范围清晰、代码与数据库资产完整公开的 Flowable 8 工程实现。
 
