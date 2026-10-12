@@ -35,13 +35,13 @@ ApprovaPlat 是一套基于 Flowable 8 的审批系统实现。
 
 ## 为什么做这个项目
 
-我在一次 B 端 AI 产品实习中接触到企业审批，也开始关注一套审批中台是怎样把流程、表单、权限和业务数据串起来的。
+我在一次 B 端 中后台 产品实习中接触到企业审批，也开始关注一套生产级中后台是怎样把流程、表单、权限和业务数据串起来的。
 
 在调研 [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue)、[芋道](https://github.com/YunaiV/ruoyi-vue-pro)、[Flowable](https://github.com/flowable/flowable-engine) 和 [bpmn.io](https://github.com/bpmn-io/bpmn-js) 等项目后，我希望建立一套技术栈较新、开放范围清晰、代码与数据库资产完整公开的 Flowable 8 工程实现。
 
 ApprovaPlat 因此以 Flowable 8 为运行核心，把设计、部署、发起、办理、权限、数据与审计完整串起来，并将业务规则、SQL、文档和验证入口放在同一仓库持续维护。
 
-项目目前还在早期，核心代码、SQL、文档和测试会保持公开。欢迎各位大佬多提建议，也希望正在开发、准备开发或迁移审批系统的人，能从这里找到一些真正用得上的实现和经验。
+项目目前还在早期，核心代码、SQL、文档和测试会保持公开。欢迎各位大佬多提建议，也希望正在开发、准备开发或迁移流程系统的人，能从这里找到一些真正用得上的实现和经验。
 
 ## 目前支持
 
