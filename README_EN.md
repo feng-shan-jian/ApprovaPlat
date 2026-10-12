@@ -2,13 +2,13 @@
 
 # ApprovaPlat
 
-**Run production-oriented approval workflows from design through audit.**
+**An open-source B2B workflow and back-office platform.**
 
-An open-source approval platform built on RuoYi, Flowable 8, Spring Boot 4, and Vue 3, covering design, runtime, authorization, data, and audit.
+Built on RuoYi, Flowable 8, Spring Boot 4, and Vue 3, covering process design, deployment, submission, task handling, authorization, data, and audit.
 
 [中文](README.md) | **English**
 
-[Quick start](#quick-start) · [Current capabilities](#what-works-today) · [Production acceptance boundary](#production-acceptance-boundary)
+[Screenshots](#screenshots) · [Quick start](#quick-start) · [Current capabilities](#what-works-today) · [Production acceptance boundary](#production-acceptance-boundary)
 
 [![Flowable 8.0.0](https://img.shields.io/badge/Flowable-8.0.0-2f855a?style=flat-square)](https://github.com/flowable/flowable-engine) [![Spring Boot 4.0.6](https://img.shields.io/badge/Spring%20Boot-4.0.6-6db33f?style=flat-square)](https://spring.io/projects/spring-boot) [![Vue 3.5.26](https://img.shields.io/badge/Vue-3.5.26-42b883?style=flat-square)](https://vuejs.org/) [![Project status](https://img.shields.io/badge/Status-Early%20Stage-f59e0b?style=flat-square)](#where-the-project-stands) [![MIT License](https://img.shields.io/badge/License-MIT-1f2937?style=flat-square)](LICENSE)
 
@@ -28,15 +28,32 @@ An open-source approval platform built on RuoYi, Flowable 8, Spring Boot 4, and 
   </tr>
 </table>
 
+## Project overview
+
+ApprovaPlat is a back-office system built on Flowable 8.
+
+The following workflow is implemented:
+
+```text
+Process design
+  → Validation and deployment
+  → Process submission
+  → Flowable execution
+  → Task handling
+  → History and audit
+```
+
+Processes, forms, authorization, business data, and runtime state are maintained together in the project. It can be used to learn Flowable 8, develop workflow systems, or provide a reference for further development.
+
 ## Why ApprovaPlat exists
 
-I encountered enterprise approvals during an internship on a B2B AI product and became interested in how an approval platform connects processes, forms, authorization, and business data.
+During an internship focused on B2B back-office product design and full-stack development, I encountered complex manufacturing scenarios. This led me to explore how a production-grade back-office system turns complex workflow, form, authorization, and business-data requirements into features and connects them through software.
 
 After studying projects such as [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue), [Yudao](https://github.com/YunaiV/ruoyi-vue-pro), [Flowable](https://github.com/flowable/flowable-engine), and [bpmn.io](https://github.com/bpmn-io/bpmn-js), I wanted a modern Flowable 8 implementation with a clear open-source scope and complete public code and database assets.
 
 ApprovaPlat therefore uses Flowable 8 as its runtime core, connects design, deployment, submission, task handling, authorization, data, and auditing, and maintains business rules, SQL, documentation, and verification entry points in one repository.
 
-The project is still early, and its core code, SQL, documentation, and tests will remain public. Feedback from experienced developers is always welcome, and I hope anyone building, planning, or migrating an approval system can find implementations and lessons here that are genuinely useful.
+The project is still early, and its core code, SQL, documentation, and tests will remain public. Feedback from experienced developers is always welcome, and I hope anyone building, planning, or migrating a workflow system can find implementations and lessons here that are genuinely useful.
 
 ## Where the project stands
 
@@ -46,8 +63,8 @@ Today, process design, deployment, submission, task handling, history, and audit
 
 It is currently best suited to:
 
-- Learning Flowable 8 and how an approval system connects its frontend, backend, authorization, and data.
-- Serving as a reference implementation or foundation for a new approval project.
+- Learning Flowable 8 and how a workflow system connects its frontend, backend, authorization, and data.
+- Serving as a reference implementation or foundation for a new workflow project.
 - Validating target capabilities for a Flowable version upgrade or migration from another workflow engine.
 - Running a pilot before production while completing deployment, capacity, and failure testing for the target environment.
 
@@ -80,6 +97,42 @@ It is currently best suited to:
 - Provide health checks, runtime snapshots, Micrometer/Prometheus metrics, attachment cleanup locks, and runtime readiness validation.
 
 ## Screenshots
+
+### Purchase request form
+
+Configure purchase details, amounts, delivery dates, and quotation attachments in the form designer.
+
+![Purchase request form designer: components, canvas, and field properties](docs/assets/readme/form-designer.png)
+
+### Procurement approval process
+
+The process includes an initial procurement review, parallel finance and legal reviews, an amount-based branch, a timer wait, and an archiving subprocess.
+
+![Procurement BPMN designer: parallel reviews, conditional branches, timer waits, and a subprocess](docs/assets/readme/procurement-designer.png)
+
+### Submission form and instance list
+
+Complete a purchase request, then save a draft or submit it for approval.
+
+![Process submission: deployed form snapshot and purchase amount example](docs/assets/readme/process-start.png)
+
+Use My Requests to find applications and check their current step and approval status.
+
+![My Requests: querying complex approval instances and their completion status](docs/assets/readme/process-instances.png)
+
+### Execution trace
+
+This purchase request has an amount of **3,000**. It passes through parallel finance and legal reviews, large-amount approval, and tax review before archiving. Green highlights show the nodes and connections that actually ran.
+
+![Completed procurement approval for an amount of 3000: large-amount branch and actual execution path](docs/assets/readme/procurement-trace.png)
+
+### Approval history
+
+View the handler, elapsed time, claim records, and approval comments for each step.
+
+![Approval history: initial procurement review, candidate claiming, and comments](docs/assets/readme/approval-history.png)
+
+### Dynamic multi-instance approval
 
 The view below shows a dynamic multi-instance approval completed in a real frontend, backend, Flowable, MySQL, and Redis environment. The page reloads the instance state and deployed BPMN, then highlights the path that actually ran.
 
@@ -117,7 +170,7 @@ Install the frontend dependencies:
 
 ```powershell
 Set-Location ruoyi-ui
-npm install
+npm ci
 ```
 
 Open `ruoyi-admin` in IDEA and run `RuoYiApplication`. Local development does not require database, Druid Monitor, or upload-directory environment variables.
@@ -164,11 +217,12 @@ Common development checks:
 mvn clean verify
 
 Set-Location ruoyi-ui
+npm run lint
 npm run test:contracts
 npm run build:prod
 ```
 
-Tests cover core workflow chains, runtime fact reuse, request contracts, and browser scenarios for drafts and workflow observation. See [CONTRIBUTING](CONTRIBUTING.md#验证) for H2, optional MySQL, and browser prerequisites and coverage limits.
+Tests cover core Flowable workflow chains, transactions, authorization, idempotency and concurrency conflicts, runtime fact reuse, frontend request contracts, and browser scenarios for drafts and workflow observation. See [CONTRIBUTING](CONTRIBUTING.md#验证) for H2, optional MySQL, and browser prerequisites and coverage limits.
 
 ## Technology
 
@@ -181,7 +235,7 @@ Tests cover core workflow chains, runtime fact reuse, request contracts, and bro
 | Designer              | BPMN.js 18.22.0                                        |
 | Rules and connectors  | CEL, JSqlParser, controlled Java / HTTP / SQL          |
 | Observability         | Spring Boot Actuator, Micrometer, Prometheus           |
-| Verification          | JUnit 5, frontend contract tests, production builds    |
+| Verification          | JUnit 5, frontend contract tests, browser E2E, production builds |
 
 ## Repository layout
 
@@ -196,7 +250,7 @@ ApprovaPlat/
 
 ## Contributing
 
-Issues and pull requests are welcome, especially when they bring a real approval scenario, migration problem, or hard-earned lesson into the project.
+Issues and pull requests are welcome, especially when they bring a real approval scenario, migration problem, or hard-earned lesson into the project. For bug reports, include the environment, reproduction steps, expected behavior, and actual behavior. Feature requests can describe a specific approval scenario.
 
 See the [contribution guide (Chinese)](CONTRIBUTING.md) for development conventions, verification commands, and pull request requirements.
 
