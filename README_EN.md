@@ -2,7 +2,7 @@
 
 # ApprovaPlat
 
-**An open-source B2B workflow and back-office platform.**
+**An open-source business workflow and back-office platform.**
 
 Built on RuoYi, Flowable 8, Spring Boot 4, and Vue 3, covering process design, deployment, submission, task handling, authorization, data, and audit.
 
@@ -47,7 +47,7 @@ Processes, forms, authorization, business data, and runtime state are maintained
 
 ## Why ApprovaPlat exists
 
-During an internship focused on B2B back-office product design and full-stack development, I encountered complex manufacturing scenarios. This led me to explore how a production-grade back-office system turns complex workflow, form, authorization, and business-data requirements into features and connects them through software.
+During an internship focused on business-facing back-office product design and full-stack development, I encountered complex manufacturing scenarios. This led me to explore how a production-grade back-office system turns complex workflow, form, authorization, and business-data requirements into features and connects them through software.
 
 After studying projects such as [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue), [Yudao](https://github.com/YunaiV/ruoyi-vue-pro), [Flowable](https://github.com/flowable/flowable-engine), and [bpmn.io](https://github.com/bpmn-io/bpmn-js), I wanted a modern Flowable 8 implementation with a clear open-source scope and complete public code and database assets.
 
@@ -80,11 +80,12 @@ It is currently best suited to:
 
 - Use dedicated views for new requests, my requests, inbox, claimable tasks, completed work, and CC notifications.
 - Start, withdraw, cancel, terminate, suspend, and activate process instances; claim, approve, delegate, transfer, return, and reject tasks.
-- Run ALL and ANY multi-instance approval modes, add or remove approvers dynamically, and handle concurrent update conflicts.
+- Run ALL and ANY multi-instance approval modes, add or remove approvers dynamically, and handle revision conflicts in multi-instance approval and return flows.
 - Persist submission and deployment form snapshots. Attachment handling covers object-level authorization, quotas, binding, downloads, deletion, and physical cleanup.
 
 ### Advanced workflows and integration
 
+- Use exclusive, parallel, inclusive, and event gateways.
 - Run controlled repeat approval with an exit condition, maximum iterations, and an audit trail for each round.
 - Use BPMN Error, Escalation, boundary timers, business calendars, approval SLAs, and DMN decisions.
 - Use controlled Java/CEL, HTTP and SQL connectors, integration credentials, and runtime event endpoints.
@@ -94,6 +95,7 @@ It is currently best suited to:
 
 - Separate design, submission, approval, administration, and audit duties, with object-level authorization for instances, tasks, deployments, attachments, and audit data.
 - Keep Flowable and business data in the same primary datasource and transaction boundary. Backend runtime facts and the formal database form the single authoritative workflow state.
+- Reload process instances, deployed BPMN, and historical execution paths.
 - Provide health checks, runtime snapshots, Micrometer/Prometheus metrics, attachment cleanup locks, and runtime readiness validation.
 
 ## Screenshots
@@ -141,9 +143,9 @@ The view below shows a dynamic multi-instance approval completed in a real front
 ## Production acceptance boundary
 
 - Production fixes `flowable.database-schema-update=false`; maintained repository SQL and runtime validation provide the schema update path.
-- Formal gateway entry points cover exclusive, parallel, inclusive, and event gateways. Controlled loops execute business repetition, while standard loops retain XML round-trip support.
-- Async executors are enabled after database, topology, capacity, monitoring, and single-executor coordination acceptance, then run timers, SLAs, and background work.
-- Multi-node operation, shared attachment storage, real external side effects, backup recovery, and long-duration stability enter production after acceptance in the target environment.
+- Controlled loops execute business repetition, while standard loops retain XML round-trip support.
+- Async executors are disabled by default. Enable them only after validating the database, topology, capacity, monitoring, and execution coordination for timers, SLAs, and background work.
+- Validate multi-node operation and failure recovery, shared attachment storage, idempotency and failure recovery for external HTTP/SQL calls, capacity, backup recovery, and long-duration stability in the target environment before production use.
 
 ## Quick start
 
@@ -154,6 +156,7 @@ The view below shows a dynamic multi-instance approval completed in a real front
 - Node.js 20+
 - npm 10+
 - Docker with Docker Compose
+- PowerShell 7.4+ (`pwsh`) for the repository verification scripts
 
 ### First-time development
 
@@ -182,7 +185,7 @@ Set-Location ruoyi-ui
 npm ci
 ```
 
-Set the same `RUOYI_DB_USERNAME` and `RUOYI_DB_PASSWORD` in the IDEA run configuration, then run `RuoYiApplication` from `ruoyi-admin`. An already running IDEA process does not inherit variables set later in PowerShell. Druid Monitor and the upload directory can use their defaults.
+Open the repository root in IDEA and import the root `pom.xml`. Set the same `RUOYI_DB_USERNAME` and `RUOYI_DB_PASSWORD` in the run configuration, then run `RuoYiApplication` from `ruoyi-admin`. An already running IDEA process does not inherit variables set later in PowerShell. Druid Monitor and the upload directory can use their defaults.
 
 Start the frontend from `ruoyi-ui`:
 
@@ -226,11 +229,17 @@ See the [architecture guide](docs/architecture.md) for current module responsibi
 
 ## Development and testing
 
-Common development checks:
+Run the daily quick checks from the repository root:
 
 ```powershell
-mvn clean verify
+pwsh -NoProfile -File ./bin/verify-rules.ps1 -Mode Quick
+```
 
+`Quick` runs backend local/H2 tests, frontend lint/contracts/build, and architecture and diff checks. It removes external MySQL/Redis test environment variables in the Maven child process. Real MySQL/Redis and browser acceptance require their own modes and prerequisites. Direct `mvn clean verify` still selects database tests from the current environment; see [CONTRIBUTING](CONTRIBUTING.md#验证).
+
+For frontend-only checks:
+
+```powershell
 Set-Location ruoyi-ui
 npm run lint
 npm run test:contracts
@@ -250,7 +259,7 @@ Tests cover core Flowable workflow chains, transactions, authorization, idempote
 | Designer              | BPMN.js 18.22.0                                        |
 | Rules and connectors  | CEL, JSqlParser, controlled Java / HTTP / SQL          |
 | Observability         | Spring Boot Actuator, Micrometer, Prometheus           |
-| Verification          | JUnit 5, frontend contract tests, browser E2E, production builds |
+| Verification          | JUnit Jupiter 6.0.3, frontend contract tests, browser E2E, production builds |
 
 ## Repository layout
 
@@ -258,9 +267,10 @@ Tests cover core Flowable workflow chains, transactions, authorization, idempote
 ApprovaPlat/
 |- pom.xml       Maven reactor entry point
 |- ruoyi-*/      Spring Boot backend modules and Flowable domain module
-|- ruoyi-ui/     Vue 3 frontend, workflow designer, and contract tests
+|- ruoyi-ui/     Vue 3 frontend, workflow designer, and frontend tests
 |- sql/          Database baseline, business schema, and menu permissions
-`- docs/         README image assets
+|- bin/          Formal verification, environment registration, and artifact migration tools
+`- docs/         Architecture, verification, migration guides, and README image assets
 ```
 
 ## Contributing

@@ -154,6 +154,7 @@ ApprovaPlat 因此以 Flowable 8 为运行核心，把设计、部署、发起�
 * Node.js 20+
 * npm 10+
 * Docker（包含 Docker Compose）
+* PowerShell 7.4+（运行仓库验证脚本，命令为 `pwsh`）
 
 ### 1. 启动 MySQL 和 Redis
 
@@ -188,7 +189,7 @@ npm ci
 
 ### 3. 启动后端
 
-在 IDEA 的运行配置中设置同一组 `RUOYI_DB_USERNAME`、`RUOYI_DB_PASSWORD`，然后在 `ruoyi-admin` 中运行：
+在 IDEA 中打开仓库根目录并导入根 `pom.xml`。在运行配置中设置同一组 `RUOYI_DB_USERNAME`、`RUOYI_DB_PASSWORD`，然后在 `ruoyi-admin` 中运行：
 
 ```text
 RuoYiApplication
@@ -263,17 +264,19 @@ ApprovaPlat 当前处于 **Early Stage**。
 * HTTP / SQL 等外部调用的幂等与异常恢复
 * 容量、备份恢复与长时间稳定性
 
-生产环境使用 `flowable.database-schema-update=false`，数据库结构由仓库 SQL 维护。异步执行器在数据库、拓扑、容量、监控和唯一执行协调验收通过后启用。业务重复审批使用受控整改循环；标准循环保留 XML 往返能力。
+生产环境使用 `flowable.database-schema-update=false`，数据库结构由仓库 SQL 维护。异步执行器默认关闭，在数据库、拓扑、容量、监控和执行协调验收通过后启用。业务重复审批使用受控整改循环；标准循环保留 XML 往返能力。
 
 ## 开发与测试
 
-后端：
+在仓库根目录执行日常快速检查：
 
 ```powershell
-mvn clean verify
+pwsh -NoProfile -File ./bin/verify-rules.ps1 -Mode Quick
 ```
 
-前端：
+`Quick` 包含后端本地/H2 测试、前端 lint/契约/构建，以及架构和 diff 检查；它在 Maven 子进程中移除外部 MySQL/Redis 测试环境变量。真实 MySQL/Redis 和浏览器验收需使用各自入口及前置条件。直接执行 `mvn clean verify` 时，数据库测试仍按当前环境变量选择，详见 [CONTRIBUTING.md](CONTRIBUTING.md#验证)。
+
+仅检查前端时：
 
 ```powershell
 Set-Location ruoyi-ui
@@ -297,7 +300,7 @@ MySQL 集成测试和浏览器回归的运行方式见 [CONTRIBUTING.md](CONTRIB
 | 设计器    | BPMN.js 18.22.0                            |
 | 规则与连接器 | CEL、JSqlParser、受控 Java / HTTP / SQL        |
 | 可观测性   | Spring Boot Actuator、Micrometer、Prometheus |
-| 测试     | JUnit 5、前端 Contract Test、Browser E2E       |
+| 测试     | JUnit Jupiter 6.0.3、前端 Contract Test、Browser E2E       |
 
 ## 仓库结构
 
@@ -307,7 +310,8 @@ ApprovaPlat/
 ├── ruoyi-*/       Spring Boot 后端与 Flowable 领域模块
 ├── ruoyi-ui/      Vue 3 前端、流程设计器与前端测试
 ├── sql/           数据库基线、业务结构与菜单权限
-└── docs/          README 图片等文档资源
+├── bin/           正式验证、环境登记与制品迁移工具
+└── docs/          架构、验收、迁移说明及 README 图片
 ```
 
 ## 参与项目
