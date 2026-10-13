@@ -77,6 +77,7 @@
 </template>
 
 <script setup name="WorkflowModelDesign">
+import { designerIdentityContract, identityRequestTarget } from '@/components/workflow/designer/designerIdentityContract.js'
 import { loadModelFormOptions } from './modelFormOptions'
 import { listApprovalUserOptions, listClaimableIdentityOptions, listIdentityOptions, resolveIdentityOptions } from '@/api/workflow/identity'
 import { getModel, saveModel, getModelDesignDraft, saveModelDesignDraft, discardModelDesignDraft } from '@/api/workflow/model'
@@ -264,25 +265,6 @@ onBeforeUnmount(() => {
 })
 
 /**
- * 将设计器身份请求映射到隔离的选项池，非法能力组合必须失败关闭。
- * @param {{type?: string, capability?: string}|undefined} request 设计器提交的身份类型和能力范围。
- * @returns {string} 对应隔离选项池键；空串表示非法组合。
- */
-function identityRequestTarget(request) {
-  const contracts = {
-    assignees: ['user', 'approval'], candidateUsers: ['user', 'claim'],
-    candidateGroups: ['group', 'claim'], candidateRoles: ['role', 'claim'],
-    activeUsers: ['user', ''], activeRoles: ['role', ''], activeDepts: ['dept', ''],
-    autoCopyUsers: ['user', 'copy'], autoCopyGroups: ['group', 'copy']
-  }
-  const target = String(request?.target || '')
-  const contract = contracts[target]
-  return contract && contract[0] === request?.type && contract[1] === (request?.capability || '')
-    ? target
-    : ''
-}
-
-/**
  * 根据设计器检索请求读取直接办理人或完整可认领候选身份目录。
  * @param {{type: 'user'|'group', keyword: string, capability: 'approval'|'claim'|'copy'}} request 检索类型、关键字和资格范围。
  * @returns {Promise<void>} 最新请求完成后替换对应身份选项，过期响应会被丢弃。
@@ -354,7 +336,7 @@ async function searchIdentityDirectory(request) {
       }
       return
     }
-    const type = { activeUsers: 'user', activeRoles: 'role', activeDepts: 'dept' }[target]
+    const { type } = designerIdentityContract(target, 'search')
     const response = await listIdentityOptions({ type, keyword, pageNum: 1, pageSize: 50 })
     if (requestVersion === identityRequestVersion[target]) {
       identityOptions[target] = response.rows || []
@@ -383,7 +365,7 @@ function mergeResolvedIdentityOptions(target, rows) {
  * @returns {Promise<void>} 最新正式名称和 available 状态合并完成后结束。
  */
 async function resolveSelectedIdentities(request) {
-  const target = identityRequestTarget(request)
+  const target = identityRequestTarget(request, 'resolve')
   const values = [...new Set((Array.isArray(request?.values) ? request.values : [])
     .map(value => String(value || '').trim()).filter(Boolean))]
   if (!target || !values.length || values.length > 200) {
@@ -404,14 +386,8 @@ async function resolveSelectedIdentities(request) {
       mergeResolvedIdentityOptions(target, responses.flatMap(response => response?.data || []))
       return
     }
-    const contract = {
-      assignees: ['user', 'approval'], candidateUsers: ['user', 'claim'],
-      candidateRoles: ['role', 'claim'], activeUsers: ['user', ''],
-      activeRoles: ['role', ''], activeDepts: ['dept', '']
-    }[target]
-    const response = await resolveIdentityOptions({
-      type: contract[0], capability: contract[1], values
-    })
+    const { type, capability } = designerIdentityContract(target, 'resolve')
+    const response = await resolveIdentityOptions({ type, capability, values })
     mergeResolvedIdentityOptions(target, response.data || [])
   } finally {
     identityPending.value -= 1

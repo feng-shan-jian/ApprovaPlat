@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.model;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import com.ruoyi.flowable.service.integration.WorkflowConnectorCheckService;
 import com.ruoyi.flowable.service.integration.WorkflowConnectorEndpointService;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -70,7 +71,7 @@ class WorkflowConnectorCheckIntegrationTest
     void setUp() throws Exception
     {
         String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
-        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
+        WorkflowMysqlTargetGuard.verify(url);
         var source = new DriverManagerDataSource(url, System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"),
                 System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
         jdbc = new JdbcTemplate(source);

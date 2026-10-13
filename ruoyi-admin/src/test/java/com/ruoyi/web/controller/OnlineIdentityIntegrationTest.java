@@ -1,5 +1,6 @@
 package com.ruoyi.web.controller;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -448,8 +449,9 @@ class OnlineIdentityIntegrationTest
         {
             String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
             String host = System.getenv("WORKFLOW_REDIS_TEST_HOST");
-            assumeTrue(url != null && host != null, "WORKFLOW_MYSQL_TEST_URL and WORKFLOW_REDIS_TEST_HOST required");
-            assertTrue(url.matches("jdbc:mysql://[^/]+/[^?]*_it(?:\\?.*)?"), "Use an isolated _it database");
+            assumeTrue(url != null, "WORKFLOW_MYSQL_TEST_URL required");
+            WorkflowMysqlTargetGuard.verify(url);
+            assumeTrue(host != null, "WORKFLOW_REDIS_TEST_HOST required");
             DriverManagerDataSource dataSource = new DriverManagerDataSource(url,
                     System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
             jdbc = new JdbcTemplate(dataSource);

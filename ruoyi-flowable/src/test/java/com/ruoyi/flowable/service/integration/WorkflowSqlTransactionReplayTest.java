@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.integration;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -162,7 +163,7 @@ class WorkflowSqlTransactionReplayTest
             assertThrows(ServiceException.class, () -> freeze(source, valid.deepCopy().put("sql", sql)));
             assertThrows(ServiceException.class, () -> connector.execute(execution("rejected", "unused"), frozen.deepCopy().put("sql", sql)));
         }
-        // Reserved result variables already have broad HTTP/SQL coverage in WorkflowModelCompilationIntegrationTest.
+        // Reserved result variables already have broad HTTP/SQL coverage in WorkflowExtensionExecutionContractTest.
         // An ordinary output is also forbidden for external writes: MySQL affected-row counts vary on replay.
         assertThrows(ServiceException.class, () -> freeze(source, valid.deepCopy().put("resultVariable", "affectedRows")));
         assertThrows(ServiceException.class, () -> connector.execute(execution("rejected", "unused"),
@@ -265,7 +266,7 @@ class WorkflowSqlTransactionReplayTest
         {
             String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
             assumeTrue(url != null && !url.isBlank(), "WORKFLOW_MYSQL_TEST_URL required");
-            assertTrue(url.matches("jdbc:mysql://[^/]+/[^?]*_it(?:\\?.*)?"), "Use an isolated _it database");
+            WorkflowMysqlTargetGuard.verify(url);
             String username = System.getenv("WORKFLOW_MYSQL_TEST_USERNAME");
             String password = System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD");
             dataSource = new DriverManagerDataSource(url, username, password);

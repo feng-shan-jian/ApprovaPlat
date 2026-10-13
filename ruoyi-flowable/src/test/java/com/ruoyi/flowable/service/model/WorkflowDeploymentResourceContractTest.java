@@ -39,6 +39,48 @@ import com.ruoyi.flowable.service.task.*;
 class WorkflowDeploymentResourceContractTest
 {
     @Test
+    void referenceCheckerReadsCurrentTopLevelFormIdAndBlocksDamagedMetadata()
+    {
+        var repository = mock(org.flowable.engine.RepositoryService.class);
+        var models = mock(org.flowable.engine.repository.ModelQuery.class, RETURNS_SELF);
+        var definitions = mock(org.flowable.engine.repository.ProcessDefinitionQuery.class, RETURNS_SELF);
+        var model = mock(org.flowable.engine.repository.Model.class);
+        var artifacts = mock(WorkflowDeploymentArtifactRepository.class);
+        when(repository.createModelQuery()).thenReturn(models);
+        when(models.list()).thenReturn(List.of(model));
+        when(repository.createProcessDefinitionQuery()).thenReturn(definitions);
+        when(definitions.list()).thenReturn(List.of());
+        var checker = new com.ruoyi.flowable.service.impl.FlowableWorkflowReferenceChecker(repository, artifacts);
+        when(model.getMetaInfo()).thenReturn("{\"createUser\":\"100\",\"formType\":1,\"formId\":7}");
+        assertThat(checker.hasFormReference(List.of(7L))).isTrue();
+        assertThat(checker.hasFormReference(List.of(8L))).isFalse();
+        for (String metadata : List.of("{}", "{\"formId\":null}", "{\"nested\":{\"formId\":7}}",
+                "{\"FORMID\":7}", "{\"formKey\":\"key_7\"}"))
+        {
+            when(model.getMetaInfo()).thenReturn(metadata);
+            assertThat(checker.hasFormReference(List.of(7L))).as(metadata).isFalse();
+        }
+        for (String metadata : List.of("broken-json", "[]", "1", "{\"formId\":[7]}",
+                "{\"formId\":\"key_7\"}", "{\"formId\":0}", "{\"formId\":9223372036854775808}"))
+        {
+            when(model.getMetaInfo()).thenReturn(metadata);
+            assertThat(checker.hasFormReference(List.of(99L))).as(metadata).isTrue();
+        }
+        when(model.getMetaInfo()).thenReturn("{}");
+        var definition = mock(org.flowable.engine.repository.ProcessDefinition.class);
+        when(definition.getId()).thenReturn("definition");
+        when(definitions.list()).thenReturn(List.of(definition));
+        var bpmn = new org.flowable.bpmn.model.BpmnModel();
+        var process = new org.flowable.bpmn.model.Process(); process.setId("current");
+        var start = new org.flowable.bpmn.model.StartEvent(); start.setId("start"); start.setFormKey("key_7");
+        process.addFlowElement(start); bpmn.addProcess(process);
+        when(repository.getBpmnModel("definition")).thenReturn(bpmn);
+        assertThat(checker.hasFormReference(List.of(7L))).isTrue();
+        when(artifacts.hasFormReference(Set.of(8L))).thenReturn(true);
+        assertThat(checker.hasFormReference(List.of(8L))).isTrue();
+    }
+
+    @Test
     void enforcesDmnDeletionContractsFromPersistedReferences()
     {
         new ApplicationContextRunner().withUserConfiguration(Database.class, WorkflowDecisionTableConfiguration.class)

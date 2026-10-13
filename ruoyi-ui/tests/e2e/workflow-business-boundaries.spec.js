@@ -1,30 +1,18 @@
-import { expect, test } from '@playwright/test'
-import { execFileSync } from 'node:child_process'
+import { expect, test, realDatabaseSql } from './fixtures/real-database-test.js'
 import { connect } from 'node:net'
 import { prepareNotificationCycle } from './fixtures/workflow-notification-cycle.js'
 
 // N09：真实登录、设计器、部署、草稿附件、任务与数据库；API只用于夹具准备、读取证据和精确清理。
-// 要求可销毁的隔离 _it 库，不能把本套件指向业务库。密码只从进程环境读取。
+// Shared development database: every write requires the registered run guard.
 test.describe.configure({ mode: 'serial' })
 test.use({ actionTimeout: 15000 })
-test.skip(!process.env.WORKFLOW_MYSQL_TEST_URL || !process.env.WORKFLOW_E2E_USERNAME,
-  '真实业务链需要显式提供隔离 MySQL 和合成登录账号')
 const runKey = `n09_${Date.now()}`
 const models = [], instances = [], drafts = [], attachments = [], notificationCycles = []
 let adminPage, adminContext, category, form, actor, previousCaptcha, previousEmail, initiatorId
-const mysqlUri = new URL((process.env.WORKFLOW_MYSQL_TEST_URL || 'jdbc:mysql://localhost/invalid').replace(/^jdbc:/, ''))
-const database = mysqlUri.pathname.slice(1)
 const quote = value => value == null ? 'NULL' : value === '' ? "''"
   : `CONVERT(0x${Buffer.from(String(value)).toString('hex')} USING utf8mb4) COLLATE utf8mb4_unicode_ci`
 
-function sql(query) {
-  if (!database.endsWith('_it')) throw new Error('真实业务浏览器测试必须使用独立 _it 数据库')
-  return execFileSync(process.env.WORKFLOW_MYSQL_CLIENT || (process.platform === 'win32'
-    ? 'C:/Program Files/MySQL/MySQL Server 8.4/bin/mysql.exe' : 'mysql'), [
-    '-h', mysqlUri.hostname, '-P', mysqlUri.port || '3306', '-u', process.env.WORKFLOW_MYSQL_TEST_USERNAME,
-    `--database=${database}`, '--batch', '--raw', '--skip-column-names', '--default-character-set=utf8mb4', '-e', query
-  ], { encoding: 'utf8', env: { ...process.env, MYSQL_PWD: process.env.WORKFLOW_MYSQL_TEST_PASSWORD } }).trim()
-}
+function sql(query) { return realDatabaseSql(query) }
 
 async function clearCaptchaCache() {
   const parts = ['DEL', 'sys_config:sys.account.captchaEnabled']

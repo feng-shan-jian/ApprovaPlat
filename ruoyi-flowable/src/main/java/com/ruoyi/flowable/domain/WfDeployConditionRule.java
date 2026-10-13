@@ -4,7 +4,7 @@ import java.util.Date;
 
 /**
  * 排他或包容网关条件分支的不可变部署快照，保存在 Flowable 业务制品资源
- * {@code approvaplat/conditions-v2.json}；制品仓库兼容解码旧版本，运行直接消费规则正文。
+ * {@code approvaplat/conditions-v2.json}；旧版本通过离线迁移升级，运行直接消费规则正文。
  */
 public class WfDeployConditionRule
 {

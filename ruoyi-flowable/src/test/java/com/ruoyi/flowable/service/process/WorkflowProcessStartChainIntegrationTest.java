@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.process;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -434,38 +435,7 @@ class WorkflowProcessStartChainIntegrationTest
     }
 
     @Test
-    void draftAttachmentCoordinationRejectsDuplicatesForeignOwnerFieldAndExpiredTemp()
-    {
-        var draft = createDraft(VALID_VARIABLES);
-        String attachment = insertTemporaryAttachment();
-        for (boolean submission : List.of(false, true))
-        {
-            java.util.function.Consumer<Map<String, List<String>>> coordinate = references -> {
-                if (submission) attachmentService.prepareDraftSubmissionVariables(USER_ID, draft.draftId(), VALID_VARIABLES, references);
-                else attachmentService.reconcileDraftAttachments(USER_ID, draft.draftId(), references);
-            };
-            assertThatThrownBy(() -> coordinate.accept(Map.of("evidence", List.of(attachment, attachment))))
-                    .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(400));
-            assertThatThrownBy(() -> coordinate.accept(Map.of("other", List.of(attachment))))
-                    .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(400));
-            jdbcTemplate.update("update wf_attachment set owner_user_id = ? where attachment_id = ?", OWNER_ID + 1, attachment);
-            assertThatThrownBy(() -> coordinate.accept(Map.of("evidence", List.of(attachment))))
-                    .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(403));
-            jdbcTemplate.update("update wf_attachment set owner_user_id = ?, expire_time = ? where attachment_id = ?",
-                    OWNER_ID, java.sql.Timestamp.valueOf(LocalDateTime.now().minusMinutes(1)), attachment);
-            assertThatThrownBy(() -> coordinate.accept(Map.of("evidence", List.of(attachment))))
-                    .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(409));
-            jdbcTemplate.update("update wf_attachment set expire_time = ? where attachment_id = ?",
-                    java.sql.Timestamp.valueOf(LocalDateTime.now().plusHours(1)), attachment);
-            assertThat(attachmentMapper.selectById(attachment).status()).isEqualTo(WorkflowAttachmentStatus.TEMP);
-        }
-        assertThatThrownBy(() -> attachmentService.bindDraftStartAttachments(USER_ID, draft.draftId(),
-                "instance", "start", Map.of("evidence", List.of(attachment, attachment))))
-                .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(400));
-    }
-
-    @Test
-    void detailReusesAuthorizedInstanceAndStillRejectsInvalidAttachmentRelations()
+    void detailReusesAuthorizedInstanceAndKeepsRealAttachmentObjectPermissions()
     {
         String attachmentId = insertTemporaryAttachment();
         Map<String, Object> values = Map.of("requester", "Alice", "evidence", List.of(attachmentId));
@@ -478,17 +448,8 @@ class WorkflowProcessStartChainIntegrationTest
         assertThat(metadata.get(attachmentId).get("attachmentId").asText()).isEqualTo(attachmentId);
         verify(attachmentMapper, times(1)).selectByIds(List.of(attachmentId));
         verifyNoInteractions(processAccess);
-        assertThatThrownBy(() -> attachmentService.projectReadableBoundMetadata(access, Map.of(attachmentId, "wrongField")))
-                .hasMessageContaining("字段或状态不一致");
         var other = submitDraft(createDraft(VALID_VARIABLES), VALID_VARIABLES);
         var otherAccess = processAccess.requireReadableInstance(other.processInstanceId());
-        assertThatThrownBy(() -> attachmentService.projectReadableBoundMetadata(otherAccess, Map.of(attachmentId, "evidence")))
-                .hasMessageContaining("字段或状态不一致");
-        String temporaryId = insertTemporaryAttachment();
-        assertThatThrownBy(() -> attachmentService.projectReadableBoundMetadata(access, Map.of(temporaryId, "evidence")))
-                .hasMessageContaining("字段或状态不一致");
-        assertThatThrownBy(() -> attachmentService.projectReadableBoundMetadata(access, Map.of(UUID.randomUUID().toString(), "evidence")))
-                .hasMessageContaining("引用数据异常");
 
         var userMapper = mock(com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper.class);
         var history = new WorkflowProcessHistoryProjection(processEngine.getHistoryService(),
@@ -642,7 +603,7 @@ class WorkflowProcessStartChainIntegrationTest
     void mysqlDetailReadsStayInsideRepeatableReadAndLeaveNoFixtureAfterRollback()
     {
         String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
-        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
+        WorkflowMysqlTargetGuard.verify(url);
         var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(url,
                 System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
         var manager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource);

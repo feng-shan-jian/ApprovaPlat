@@ -1,3 +1,4 @@
+import { designerIdentityContract } from './designerIdentityContract.js'
 import { isBusinessVariable } from './workflowVariableNames.js'
 import { computed } from 'vue'
 import { templatePermissionIssues } from '../form/formTemplate.js'
@@ -32,17 +33,7 @@ const EMBEDDED_FORM_DATE_PATTERN = /^[A-Za-z0-9 /:._-]{1,64}$/
 const FORM_PERMISSION_DEFAULT_ID = 'approva_permission_default'
 const FORM_PERMISSION_FIELD_ID_PREFIX = 'approva_permission_field_'
 const FORM_PERMISSION_MODES = new Set(['HIDDEN', 'READONLY', 'EDITABLE', 'REQUIRED'])
-const IDENTITY_SEARCH_CONTRACTS = Object.freeze({
-  assignees: Object.freeze({ type: 'user', capability: 'approval' }),
-  candidateUsers: Object.freeze({ type: 'user', capability: 'claim' }),
-  candidateGroups: Object.freeze({ type: 'group', capability: 'claim' }),
-  candidateRoles: Object.freeze({ type: 'role', capability: 'claim' }),
-  activeUsers: Object.freeze({ type: 'user', capability: '' }),
-  activeRoles: Object.freeze({ type: 'role', capability: '' }),
-  activeDepts: Object.freeze({ type: 'dept', capability: '' }),
-  autoCopyUsers: Object.freeze({ type: 'user', capability: 'copy' }),
-  autoCopyGroups: Object.freeze({ type: 'group', capability: 'copy' })
-})
+
 
 export function createFormParticipantState() {
   return {
@@ -150,11 +141,12 @@ export function createFormParticipantDomain(context) {
     const timer = window.setTimeout(() => {
       identitySearchTimers.delete(target)
       // directoryContract 是当前选项池不可降级的服务端资格契约。
-      const directoryContract = IDENTITY_SEARCH_CONTRACTS[target]
+      const directoryContract = designerIdentityContract(target, 'search')
       if (!directoryContract) return
       emit('identity-search', {
         target,
-        ...directoryContract,
+        type: directoryContract.type,
+        capability: directoryContract.capability,
         keyword: String(keyword || '').trim()
       })
     }, 250)
@@ -168,7 +160,7 @@ export function createFormParticipantDomain(context) {
    */
   function handlePanelIdentitySearch(request) {
     const target = request?.target
-    if (!IDENTITY_SEARCH_CONTRACTS[target]) return
+    if (!designerIdentityContract(target, 'search')) return
     scheduleIdentitySearch(target, request?.keyword)
   }
 
@@ -182,11 +174,12 @@ export function createFormParticipantDomain(context) {
     const values = Array.isArray(request?.values)
       ? [...new Set(request.values.map(value => String(value || '').trim()).filter(Boolean))]
       : []
-    if (!IDENTITY_SEARCH_CONTRACTS[target] || !values.length || values.length > 200) return
+    const contract = designerIdentityContract(target, 'resolve')
+    if (!contract || !values.length || values.length > 200) return
     emit('identity-resolve', {
       target,
-      type: IDENTITY_SEARCH_CONTRACTS[target].type,
-      capability: IDENTITY_SEARCH_CONTRACTS[target].capability,
+      type: contract.type,
+      capability: contract.capability,
       values
     })
   }

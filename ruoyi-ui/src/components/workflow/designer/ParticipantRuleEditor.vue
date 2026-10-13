@@ -23,9 +23,10 @@
         :remote-method="searchTargets"
         @change="changeTargets"
       >
+        <!-- Remote select caches selected labels; replace a resolved placeholder option. -->
         <el-option
           v-for="option in targetConfiguration.options"
-          :key="option.value"
+          :key="`${option.value}:${option.label}:${option.available}`"
           :label="option.label"
           :value="String(option.value)"
           :disabled="option.available === false"

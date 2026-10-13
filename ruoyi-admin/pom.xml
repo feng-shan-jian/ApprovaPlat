@@ -78,6 +78,15 @@
         </dependency>
 
 
+        <!-- Test-only guard shared with direct IDE/Maven database fixtures. -->
+        <dependency>
+            <groupId>com.ruoyi</groupId>
+            <artifactId>ruoyi-common</artifactId>
+            <version>${project.version}</version>
+            <classifier>target-guard</classifier>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 

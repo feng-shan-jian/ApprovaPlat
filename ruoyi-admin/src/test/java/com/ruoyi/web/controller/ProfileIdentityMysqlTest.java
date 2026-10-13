@@ -1,5 +1,6 @@
 package com.ruoyi.web.controller;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import java.sql.Statement;
 import java.util.Set;
 import java.util.UUID;
@@ -39,7 +40,7 @@ class ProfileIdentityMysqlTest
     {
         String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
         assumeTrue(url != null, "WORKFLOW_MYSQL_TEST_URL required");
-        assertTrue(url.matches("jdbc:mysql://[^/]+/[^?]*_it(?:\\?.*)?"), "Use an isolated _it database");
+        WorkflowMysqlTargetGuard.verify(url);
         var dataSource = new DriverManagerDataSource(url, System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"),
                 System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);

@@ -112,6 +112,32 @@
             <artifactId>jakarta.servlet-api</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>mysql-target-guard</id>
+                        <phase>test-compile</phase>
+                        <goals><goal>test-jar</goal></goals>
+                        <configuration>
+                            <classifier>target-guard</classifier>
+                            <includes><include>com/ruoyi/common/testsupport/WorkflowMysqlTargetGuard*.class</include></includes>
+                            <excludes><exclude>**/*Test*.class</exclude></excludes>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

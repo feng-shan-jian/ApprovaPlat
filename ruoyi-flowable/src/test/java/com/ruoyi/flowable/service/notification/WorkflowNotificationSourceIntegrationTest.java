@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.notification;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -32,7 +33,7 @@ class WorkflowNotificationSourceIntegrationTest
     void setUp()
     {
         String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
-        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
+        WorkflowMysqlTargetGuard.verify(url);
         var dataSource = new DriverManagerDataSource(url,
                 System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"),
                 System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));

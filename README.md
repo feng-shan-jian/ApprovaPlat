@@ -157,14 +157,23 @@ ApprovaPlat 因此以 Flowable 8 为运行核心，把设计、部署、发起�
 
 ### 1. 启动 MySQL 和 Redis
 
-在仓库根目录执行：
+先在当前 PowerShell 进程中配置已有开发环境的连接信息，再在仓库根目录执行启动命令：
+
+```powershell
+$env:APPROVAPLAT_MYSQL_VOLUME = '<已有数据卷名称，首次使用时选择新卷名>'
+$env:APPROVAPLAT_MYSQL_ROOT_PASSWORD = '<该实例的管理员密码>'
+$env:RUOYI_DB_USERNAME = '<开发账号，不能是 root>'
+$env:RUOYI_DB_PASSWORD = '<开发账号密码>'
+```
+
+已有数据卷应使用原账号和密码；这些变量只在空卷初始化时创建账号，不会修改已有 MySQL 账号。
 
 ```powershell
 docker compose up -d
 docker compose ps
 ```
 
-第一次创建 `approvaplat-mysql-data` Volume 时，MySQL 会执行：
+指定的数据卷首次初始化时，MySQL 会执行：
 
 [初始化脚本](docker/mysql/init.sh)
 
@@ -179,11 +188,13 @@ npm ci
 
 ### 3. 启动后端
 
-在 IDEA 中打开 `ruoyi-admin`，运行：
+在 IDEA 的运行配置中设置同一组 `RUOYI_DB_USERNAME`、`RUOYI_DB_PASSWORD`，然后在 `ruoyi-admin` 中运行：
 
 ```text
 RuoYiApplication
 ```
+
+已打开的 IDEA 不会继承后来在 PowerShell 中设置的环境变量。
 
 ### 4. 启动前端
 
@@ -206,7 +217,7 @@ password: wang
 
 初始凭据仅用于本地开发，对外开放服务前请修改密码。
 
-本地开发无需设置数据库、Druid 或上传目录环境变量。更多开发和测试说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+本地开发需从当前进程提供数据库账号和密码；Druid 和上传目录可使用默认配置。更多开发和测试说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ### 日常开发
 
@@ -230,9 +241,15 @@ npm run dev
 docker compose down
 ```
 
-本地 MySQL 固定使用 `127.0.0.1:3306`、数据库 `approvaplat`、账号 `root`、密码 `root123`；Redis 使用 `127.0.0.1:6379` 且无密码。上传目录默认为 `${user.home}/.approvaplat/uploads`。
+应用与验收共用本地 MySQL `127.0.0.1:13306/approvaplat`。应用账号和密码由当前进程的 `RUOYI_DB_USERNAME`、`RUOYI_DB_PASSWORD` 提供；Compose 还需明确指定已批准的 `APPROVAPLAT_MYSQL_VOLUME` 和 `APPROVAPLAT_MYSQL_ROOT_PASSWORD`。初始化只用于批准的空卷，不能重放到已有数据的库。Redis 使用 `127.0.0.1:6379` 且无密码。上传目录默认为 `${user.home}/.approvaplat/uploads`。数据库验收需先按 [CONTRIBUTING.md](CONTRIBUTING.md) 登记实例并显式授权本轮测试。
 
 Druid Monitor 默认关闭。需要临时启用时设置 `DRUID_MONITOR_ENABLED=true`，访问 `http://localhost:8080/druid/`，本地默认账号为 `ap`、密码为 `123456`。
+
+### 升级已有数据
+
+当前运行时只读取 v2 工作流制品。包含 v1 部署资源的旧库应先停服，按[工作流制品迁移指南](docs/workflow-artifact-v2-migration.md)检查、备份并迁移，再启动新版本；不要用空库初始化 SQL 覆盖已有业务数据。
+
+当前模块职责与必须保留的事务、权限和并发边界见[架构说明](docs/architecture.md)，已执行验证及适用范围见[验收记录](docs/verification-history.md)。
 
 ## 生产验收边界
 

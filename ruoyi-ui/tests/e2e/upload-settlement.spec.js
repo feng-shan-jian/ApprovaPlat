@@ -1,13 +1,6 @@
 import { expect, test as base } from '@playwright/test'
-import { createServer } from 'vite'
-import vue from '@vitejs/plugin-vue'
-import AutoImport from 'unplugin-auto-import/vite'
-import { fileURLToPath } from 'node:url'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
+import { createComponentHost } from './fixtures/component-host.js'
 
-const root = fileURLToPath(new URL('../..', import.meta.url))
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
 
 // Only the host form and HTTP responses are controlled. Vue, Element Plus, the
@@ -45,23 +38,8 @@ app.mount('#app')
 const test = base.extend({
   uploadHost: [async ({ browserName: _browserName }, use) => {
     const pending = new Map()
-    const cacheDir = await mkdtemp(join(tmpdir(), 'upload-settlement-'))
-    if (!resolve(cacheDir).startsWith(resolve(tmpdir()) + sep)) throw new Error('Unexpected upload test cache path')
-    const server = await createServer({
-      root, cacheDir, configFile: false, logLevel: 'error',
-      optimizeDeps: { noDiscovery: true, include: ['vue', 'element-plus', 'sortablejs', 'js-cookie'] },
-      resolve: { alias: { '@': `${root}/src` } },
-      define: { 'import.meta.env.VITE_APP_BASE_API': JSON.stringify('/test-api') },
-      plugins: [vue(), AutoImport({ imports: ['vue'], dts: false }), {
-        name: 'upload-component-regression',
-        resolveId(id) { if (id === '/upload-harness.js') return '\0upload-harness' },
-        load(id) { if (id === '\0upload-harness') return harness },
-        configureServer(vite) {
-          vite.middlewares.use((req, res, next) => {
-            if (req.url?.startsWith('/upload-harness?')) {
-              res.setHeader('Content-Type', 'text/html')
-              res.end('<!doctype html><html><body><div id="app"></div><script type="module" src="/upload-harness.js"></script></body></html>')
-            } else if (req.url === '/test-api/upload' && req.method === 'POST') {
+    const host = await createComponentHost(harness, (req, res, next) => {
+      if (req.url === '/test-api/upload' && req.method === 'POST') {
               const chunks = []
               req.on('data', chunk => chunks.push(chunk))
               req.on('end', () => {
@@ -73,15 +51,10 @@ const test = base.extend({
               res.setHeader('Content-Type', 'image/png')
               res.end(png)
             } else next()
-          })
-        }
-      }],
-      server: { host: '127.0.0.1', port: 0 }
     })
     try {
-      await server.listen()
       await use({
-        url: `http://127.0.0.1:${server.httpServer.address().port}`,
+        url: host.url,
         async wait(name) {
           await expect.poll(() => pending.has(name)).toBe(true)
           expect(pending.get(name).body).toContain('settlement-test')
@@ -108,8 +81,7 @@ const test = base.extend({
       })
     } finally {
       for (const request of pending.values()) request.res.destroy()
-      await server.close()
-      await rm(cacheDir, { recursive: true, force: true })
+      await host.close()
     }
   }, { scope: 'worker' }]
 })
@@ -129,7 +101,7 @@ async function settled(page, expected, updates) {
 for (const kind of ['file', 'image']) {
   test.describe(`${kind} upload`, () => {
     test.beforeEach(async ({ page, uploadHost }) => {
-      await page.goto(`${uploadHost.url}/upload-harness?kind=${kind}`)
+      await page.goto(`${uploadHost.url}/component-harness?kind=${kind}`)
       await expect(page.getByTestId('value')).toHaveText('/existing.png')
     })
 

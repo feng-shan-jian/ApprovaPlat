@@ -1,15 +1,23 @@
 package com.ruoyi.flowable.service.attachment;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.ArgumentMatchers.any;
 
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -32,6 +40,7 @@ import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
 import com.ruoyi.flowable.domain.WfAttachment;
 import com.ruoyi.flowable.domain.WorkflowAttachmentStatus;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
 
@@ -41,38 +50,60 @@ class WorkflowAttachmentMysqlIntegrationTest
 {
     @TempDir Path root;
     private final List<String> createdIds = new ArrayList<>();
+    private final List<String> uploadKeys = new ArrayList<>();
+    private final long uploadOwner = 700_000_000L + Math.floorMod(UUID.randomUUID().getMostSignificantBits(), 100_000_000L);
     private WfAttachmentMapper mapper;
     private JdbcTemplate jdbc;
     private TransactionTemplate transaction;
     private WorkflowAttachmentStorage storage;
     private WorkflowAttachmentService service;
     private WorkflowAttachmentCleanupCoordinator coordinator;
+    private WorkflowAttachmentUploadJournal journal;
 
     @BeforeEach
     void setUp()
     {
         String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
-        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
+        WorkflowMysqlTargetGuard.verify(url);
         var dataSource = new DriverManagerDataSource(url,
                 System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
+        var checkedJdbc = new JdbcTemplate(dataSource);
+        WorkflowAttachmentMysqlTestGuard.assertEmptyUploadJournal(checkedJdbc);
         var manager = new DataSourceTransactionManager(dataSource);
         transaction = new TransactionTemplate(manager);
         transaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
-        mapper = WorkflowH2SchemaMapperSupport.createSpringMapper(dataSource, "attachment-mysql",
-                WfAttachmentMapper.class, "mapper/flowable/WfAttachmentMapper.xml");
-        jdbc = new JdbcTemplate(dataSource);
+        mapper = WorkflowAttachmentMysqlTestGuard.protectUploadCleanup(
+                WorkflowH2SchemaMapperSupport.createSpringMapper(dataSource, "attachment-mysql",
+                        WfAttachmentMapper.class, "mapper/flowable/WfAttachmentMapper.xml"), uploadKeys);
+        // A failed preflight must not enable teardown writes either.
+        jdbc = checkedJdbc;
         var properties = new WorkflowAttachmentProperties();
         storage = new WorkflowAttachmentStorage(root, properties.getMaxSize());
-        var journal = new WorkflowAttachmentUploadJournal(mapper, storage, properties, manager);
+        journal = spy(new WorkflowAttachmentUploadJournal(mapper, storage, properties, manager));
+        doAnswer(call -> {
+            String key = (String) call.callRealMethod();
+            uploadKeys.add(key);
+            return key;
+        }).when(journal).reserve(any());
         coordinator = new WorkflowAttachmentCleanupCoordinator(mapper, storage, properties, journal, manager);
+        var identity = mock(WorkflowIdentityResolver.class);
+        when(identity.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity(Long.toString(uploadOwner), Set.of()));
         service = new WorkflowAttachmentService(mapper, storage, properties,
-                mock(WorkflowIdentityResolver.class), mock(WorkflowProcessAccessService.class),
+                identity, mock(WorkflowProcessAccessService.class),
                 journal, coordinator, manager);
     }
 
     @AfterEach
     void tearDown()
     {
+        if (jdbc == null) return;
+        for (String key : uploadKeys)
+        {
+            jdbc.update("delete from wf_attachment where storage_key = ?", key);
+            jdbc.update("delete from wf_attachment_upload where storage_key = ?", key);
+            assertThat(jdbc.queryForObject("select count(*) from wf_attachment_upload where storage_key = ?", Long.class, key)).isZero();
+        }
+        jdbc.update("delete from wf_attachment_quota_guard where owner_user_id = ?", uploadOwner);
         for (String id : createdIds)
         {
             jdbc.update("delete from wf_attachment where attachment_id = ?", id);
@@ -194,6 +225,80 @@ class WorkflowAttachmentMysqlIntegrationTest
             executor.shutdownNow();
             assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
         }
+    }
+
+    @Test
+    void metadataFailureLeavesDurableJournalAndFileUntilRecovery()
+    {
+        doReturn(0).when(mapper).insert(any());
+        assertThatThrownBy(() -> service.uploadTemporary("evidence", uploadFile()))
+                .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(500));
+        String key = uploadKeys.get(0);
+        assertUploadState(key, 0, 1, true);
+        assertThat(journal.cleanupBatch().cleaned()).isOne();
+        assertUploadState(key, 0, 0, false);
+    }
+
+    @Test
+    void outerRollbackRetainsReservationButRollsBackMetadataAndJournalConsumption()
+    {
+        transaction.executeWithoutResult(status -> {
+            var view = service.uploadTemporary("evidence", uploadFile());
+            assertThat(mapper.selectById(view.attachmentId())).isNotNull();
+            assertUploadState(uploadKeys.get(0), 1, 0, true);
+            status.setRollbackOnly();
+        });
+        String key = uploadKeys.get(0);
+        assertUploadState(key, 0, 1, true);
+        assertThat(journal.cleanupBatch().cleaned()).isOne();
+        assertUploadState(key, 0, 0, false);
+    }
+
+    @Test
+    void committedUploadConsumesReservationAndCleanupPreservesOwnedFile() throws Exception
+    {
+        var view = service.uploadTemporary("evidence", uploadFile());
+        String key = uploadKeys.get(0);
+        assertUploadState(key, 1, 0, true);
+        journal.cleanupBatch();
+        assertUploadState(key, 1, 0, true);
+        // Recover a stale journal defensively without deleting the formally owned object.
+        assertThat(mapper.insertUpload(key)).isOne();
+        assertThat(journal.cleanupBatch().cleaned()).isOne();
+        assertUploadState(key, 1, 0, true);
+        try (var content = service.openReadableDownload(view.attachmentId()).content())
+        {
+            assertThat(content.readAllBytes()).isEqualTo("upload".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void claimedUploadKeyStaysUnusableAfterRetryReleasesItsToken()
+    {
+        String key = journal.reserve(uploadFile());
+        String token = UUID.randomUUID().toString();
+        assertThat(mapper.claimUpload(key, token, 60)).isOne();
+        assertThat(mapper.retryUploadCleanup(key, token, LocalDateTime.now())).isOne();
+        assertThatThrownBy(() -> transaction.executeWithoutResult(status -> journal.lock(key)))
+                .isInstanceOfSatisfying(ServiceException.class, failure -> {
+                    assertThat(failure.getCode()).isEqualTo(409);
+                    assertThat(failure.getSubCode()).isEqualTo("WORKFLOW_ATTACHMENT_STATE_CONFLICT");
+                });
+        assertUploadState(key, 0, 1, false);
+        assertThat(journal.cleanupBatch().cleaned()).isOne();
+        assertUploadState(key, 0, 0, false);
+    }
+
+    private MockMultipartFile uploadFile()
+    {
+        return new MockMultipartFile("file", "upload.txt", "text/plain", "upload".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private void assertUploadState(String key, int attachments, int reservations, boolean exists)
+    {
+        assertThat(jdbc.queryForObject("select count(*) from wf_attachment where storage_key = ?", Integer.class, key)).isEqualTo(attachments);
+        assertThat(jdbc.queryForObject("select count(*) from wf_attachment_upload where storage_key = ?", Integer.class, key)).isEqualTo(reservations);
+        assertThat(Files.exists(root.resolve(WorkflowAttachmentStorage.PRIVATE_DIRECTORY_NAME).resolve(key))).isEqualTo(exists);
     }
 
     private WfAttachment insert(WorkflowAttachmentStatus status, LocalDateTime expiry)

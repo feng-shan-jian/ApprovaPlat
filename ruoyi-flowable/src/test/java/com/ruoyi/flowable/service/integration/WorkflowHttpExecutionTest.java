@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.integration;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
@@ -207,7 +208,7 @@ class WorkflowHttpExecutionTest
     void mysqlWorkerCommitsKnownFailuresAndRecoversExpiredWorkers(String failure) throws Exception
     {
         String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
-        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
+        WorkflowMysqlTargetGuard.verify(url);
         var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(url,
                 System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
         var jdbc = new org.springframework.jdbc.core.JdbcTemplate(source);

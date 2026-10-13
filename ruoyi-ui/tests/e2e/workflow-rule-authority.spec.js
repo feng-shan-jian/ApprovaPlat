@@ -1,23 +1,13 @@
-import { expect, test } from '@playwright/test'
-import { execFileSync } from 'node:child_process'
+import { expect, test, realDatabaseSql } from './fixtures/real-database-test.js'
 import { connect } from 'node:net'
 
 test.describe.configure({ mode: 'serial' })
 const prefix = `b16_${Date.now()}`
 let admin, context, previousCaptcha
 const users = [], roles = [], menus = [], categories = [], forms = [], models = []
-const databaseUrl = new URL((process.env.WORKFLOW_MYSQL_TEST_URL || 'jdbc:mysql://127.0.0.1/unconfigured').replace(/^jdbc:/, ''))
-const database = databaseUrl.pathname.slice(1)
 const quote = value => `CONVERT(0x${Buffer.from(String(value)).toString('hex')} USING utf8mb4) COLLATE utf8mb4_unicode_ci`
 
-function sql(query) {
-  if (!database.endsWith('_it')) throw new Error('规则真实验收需要已初始化的独立 _it 库')
-  return execFileSync(process.env.WORKFLOW_MYSQL_CLIENT || (process.platform === 'win32'
-    ? 'C:/Program Files/MySQL/MySQL Server 8.4/bin/mysql.exe' : 'mysql'), [
-    '-h', databaseUrl.hostname, '-P', databaseUrl.port || '3306', '-u', process.env.WORKFLOW_MYSQL_TEST_USERNAME,
-    `--database=${database}`, '--batch', '--raw', '--skip-column-names', '--default-character-set=utf8mb4', '-e', query
-  ], { encoding: 'utf8', env: { ...process.env, MYSQL_PWD: process.env.WORKFLOW_MYSQL_TEST_PASSWORD } }).trim()
-}
+function sql(query) { return realDatabaseSql(query) }
 
 async function clearCaptchaCache() {
   await new Promise((resolve, reject) => {

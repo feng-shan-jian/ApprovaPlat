@@ -6,14 +6,16 @@ services:
     environment:
       # 本地端口仅绑定回环地址；允许 root 从宿主机连接，供 IDEA 直接启动后端使用。
       MYSQL_ROOT_HOST: "%"
-      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_ROOT_PASSWORD: ${APPROVAPLAT_MYSQL_ROOT_PASSWORD:?Supply the approved administrator password at runtime}
       MYSQL_DATABASE: approvaplat
+      MYSQL_USER: ${RUOYI_DB_USERNAME:?Supply the approved development account}
+      MYSQL_PASSWORD: ${RUOYI_DB_PASSWORD:?Supply the approved development password}
       TZ: Asia/Shanghai
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
     ports:
-      - "127.0.0.1:3306:3306"
+      - "127.0.0.1:13306:3306"
     volumes:
       # MySQL 官方入口只会在该数据卷为空时执行初始化目录中的脚本。
       - approvaplat-mysql-data:/var/lib/mysql
@@ -39,4 +41,4 @@ services:
 volumes:
   approvaplat-mysql-data:
     # 固定卷名，避免仓库目录名变化时意外创建另一套开发数据库。
-    name: approvaplat-mysql-data
+    name: ${APPROVAPLAT_MYSQL_VOLUME:?Select the explicitly approved development volume}

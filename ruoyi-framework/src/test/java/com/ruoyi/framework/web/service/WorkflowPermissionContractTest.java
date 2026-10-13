@@ -1,4 +1,4 @@
-package com.ruoyi.web.config;
+package com.ruoyi.framework.web.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -25,14 +25,13 @@ import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.framework.aspectj.DataScopeAspect;
 import com.ruoyi.framework.security.context.PermissionContextHolder;
-import com.ruoyi.framework.web.service.PermissionService;
 import com.ruoyi.system.mapper.SysUserMapper;
 import com.ruoyi.system.service.ISysMenuService;
 import com.ruoyi.system.service.ISysUserService;
 import com.ruoyi.system.service.SysPermissionEvaluator;
 import com.ruoyi.system.service.impl.SysUserServiceImpl;
 
-/** 迁移前后共同执行的 Token/实时权限矩阵及真实 Web 数据范围切面合同。 */
+/** Token/实时权限矩阵及真实 Web 数据范围切面合同，不装配业务流程模块。 */
 class WorkflowPermissionContractTest
 {
     private static final String PERMISSION = "workflow:process:state";

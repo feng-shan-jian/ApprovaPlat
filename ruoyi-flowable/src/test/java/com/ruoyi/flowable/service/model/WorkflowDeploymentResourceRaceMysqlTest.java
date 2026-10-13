@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.model;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.*;
@@ -73,7 +74,8 @@ class WorkflowDeploymentResourceRaceMysqlTest
         boolean categoryCase = "CATEGORY".equals(resource);
         boolean race = List.of("CATEGORY", "METADATA", "XML").contains(resource);
         String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
-        assumeTrue(url != null && url.matches(".*[/][^/?]+_it(?:[?].*)?"));
+        assumeTrue(url != null, "WORKFLOW_MYSQL_TEST_URL required");
+        WorkflowMysqlTargetGuard.verify(url);
         var ds = new DriverManagerDataSource(url, System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"),
                 System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
         try (var fixture = WorkflowFlowableEngineTestSupport.start(ds, Map.of()))

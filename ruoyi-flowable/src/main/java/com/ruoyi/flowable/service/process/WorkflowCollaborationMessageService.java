@@ -15,10 +15,11 @@ import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.eventsubscription.api.EventSubscription;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.ReceiveTask;
-import org.springframework.transaction.annotation.Isolation;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.common.constant.HttpStatus;
@@ -50,6 +51,7 @@ public class WorkflowCollaborationMessageService
     private final WorkflowCollaborationChannelService channelService;
     private final WorkflowCollaborationAuditService auditService;
     private final WorkflowCollaborationMetrics metrics;
+    private final TransactionTemplate independentTransaction;
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
@@ -61,7 +63,7 @@ public class WorkflowCollaborationMessageService
             RepositoryService repositoryService,
             WorkflowCollaborationChannelService channelService,
             WorkflowCollaborationAuditService auditService,
-            WorkflowCollaborationMetrics metrics)
+            WorkflowCollaborationMetrics metrics, PlatformTransactionManager transactionManager)
     {
         this.engineOperations = engineOperations;
         this.credentialService = credentialService;
@@ -71,6 +73,9 @@ public class WorkflowCollaborationMessageService
         this.channelService = channelService;
         this.auditService = auditService;
         this.metrics = metrics;
+        this.independentTransaction = new TransactionTemplate(transactionManager);
+        this.independentTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.independentTransaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
     }
 
     /**
@@ -118,8 +123,15 @@ public class WorkflowCollaborationMessageService
         row.setAttemptCount(0);
         row.setStatus("RECEIVED");
         row.setMaxAttempts(normalized.maxAttempts());
-        return engineOperations.writeAsUser(credential.actorUserId(),
-                () -> deliver(row, normalized.variables()));
+        try
+        {
+            return engineOperations.writeAsUser(credential.actorUserId(),
+                    () -> deliver(row, normalized.variables()));
+        }
+        catch (DeliveryFailure failure)
+        {
+            return recoverFailedDelivery(failure, true);
+        }
     }
 
     /**
@@ -150,43 +162,111 @@ public class WorkflowCollaborationMessageService
         {
             throw new ServiceException("协作消息主键不能为空", HttpStatus.BAD_REQUEST);
         }
-        return engineOperations.writeAsCurrentUser(identity ->
+        try
         {
-            WfCollaborationMessage row = mapper.selectByIdForUpdate(messageId.trim());
-            if (row == null)
+            return engineOperations.writeAsCurrentUser(identity ->
             {
-                throw new ServiceException("协作消息不存在", HttpStatus.NOT_FOUND);
-            }
-            if (!retryAllowed(row))
-            {
-                throw new ServiceException("当前消息状态不允许补偿", HttpStatus.CONFLICT);
-            }
-            String from = row.getStatus();
-            if ("DEAD_LETTER".equals(from)
-                    && mapper.markRetrying(row) != 1)
-            {
-                throw conflict("死信补偿状态更新不完整", "COLLAB_MESSAGE_RETRY_STATE_FAILED");
-            }
-            auditService.record(row.getMessageId(), "INBOUND", "COMPENSATE", "USER",
-                    identity.userId(), from, "RETRYING", 0, null, "管理员重新开启有界消费");
-            metrics.record("inbound_compensated");
-            WfCollaborationMessage retrying = mapper.selectByIdForUpdate(row.getMessageId());
-            return deliver(retrying, readVariables(retrying.getVariablesJson()));
-        });
+                WfCollaborationMessage row = mapper.selectByIdForUpdate(messageId.trim());
+                if (row == null) throw new ServiceException("协作消息不存在", HttpStatus.NOT_FOUND);
+                WfCollaborationMessage retrying = prepareCompensation(row, identity.userId(), true);
+                try { return deliver(retrying, readVariables(retrying.getVariablesJson())); }
+                catch (DeliveryFailure failure) { throw failure.withCompensationActor(identity.userId()); }
+            });
+        }
+        catch (DeliveryFailure failure)
+        {
+            return recoverFailedDelivery(failure, true);
+        }
     }
 
     /**
      * 由后台 worker 在独立可重复读事务中自动重试一条到期且顺序就绪的入站消息。
      * @return boolean，找到候选并完成一次尝试时为 true
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.REPEATABLE_READ,
-            rollbackFor = Exception.class)
     public boolean retryNextDue()
     {
-        WfCollaborationMessage row = mapper.selectNextDueForUpdate();
-        if (row == null) return false;
-        deliver(row, readVariables(row.getVariablesJson()));
-        return true;
+        try
+        {
+            return Boolean.TRUE.equals(independentTransaction.execute(status ->
+            {
+                WfCollaborationMessage row = mapper.selectNextDueForUpdate();
+                if (row == null) return false;
+                deliver(row, readVariables(row.getVariablesJson()));
+                return true;
+            }));
+        }
+        catch (DeliveryFailure failure)
+        {
+            recoverFailedDelivery(failure, false);
+            return true;
+        }
+    }
+
+    /** 补偿登记与消费共享事务；消费失败后在恢复事务中重做被回滚的登记。 */
+    private WfCollaborationMessage prepareCompensation(WfCollaborationMessage row, String actor, boolean recordMetric)
+    {
+        if (!retryAllowed(row)) throw new ServiceException("当前消息状态不允许补偿", HttpStatus.CONFLICT);
+        String from = row.getStatus();
+        if ("DEAD_LETTER".equals(from) && mapper.markRetrying(row) != 1)
+            throw conflict("死信补偿状态更新不完整", "COLLAB_MESSAGE_RETRY_STATE_FAILED");
+        auditService.record(row.getMessageId(), "INBOUND", "COMPENSATE", "USER",
+                actor, from, "RETRYING", 0, null, "管理员重新开启有界消费");
+        if (recordMetric) metrics.record("inbound_compensated");
+        return mapper.selectByIdForUpdate(row.getMessageId());
+    }
+
+    /**
+     * 消费事务退出并整体回滚后，独立登记失败；不在 rollback-only 事务里伪装成功。
+     * 重新锁定消息和频道，防止覆盖失败窗口内其他请求已经提交的成功结果。
+     */
+    private WorkflowCollaborationMessageView recoverFailedDelivery(DeliveryFailure failure, boolean mayJoinCaller)
+    {
+        // REQUIRED entry points may join a caller-owned transaction. Its rollback
+        // has not completed yet, so propagate the failure and preserve rollback-only.
+        // The worker's REQUIRES_NEW attempt has already completed independently.
+        if (mayJoinCaller && TransactionSynchronizationManager.isActualTransactionActive()) throw failure;
+        try
+        {
+            return independentTransaction.execute(status -> recordFailedDelivery(failure));
+        }
+        catch (RuntimeException recoveryFailure)
+        {
+            recoveryFailure.addSuppressed(failure);
+            throw recoveryFailure;
+        }
+    }
+
+    private WorkflowCollaborationMessageView recordFailedDelivery(DeliveryFailure failure)
+    {
+        WfCollaborationMessage incoming = failure.row;
+        WfCollaborationMessage row = mapper.selectByIdForUpdate(incoming.getMessageId());
+        if (row != null)
+        {
+            if (!samePayload(row, incoming))
+                throw conflict("messageId 已被不同协作消息载荷使用", "COLLAB_MESSAGE_IDEMPOTENCY_CONFLICT");
+            if ("PROCESSED".equals(row.getStatus())
+                    || ("DEAD_LETTER".equals(row.getStatus()) && failure.compensationActor == null)) return toView(row);
+        }
+        WfCollaborationChannel channel = channelService.lockInbound(incoming.getTargetProcessDefinitionKey(),
+                correlationType(incoming), correlationValue(incoming), incoming.getDeliveryMode());
+        if (row == null)
+        {
+            row = incoming;
+            row.setAttemptCount(0);
+            row.setStatus("RECEIVED");
+            row.setMatchedProcessInstanceId(null);
+            row.setTargetExecutionId(null);
+            if (mapper.insertReceived(row) != 1)
+                throw conflict("协作消息登记不完整", "COLLAB_MESSAGE_AUDIT_INSERT_FAILED");
+            auditService.record(row.getMessageId(), "INBOUND", "RECEIVE", "INTEGRATION",
+                    String.valueOf(row.getCredentialId()), null, "RECEIVED", 0, null, "接收端已持久化消息");
+        }
+        if (failure.compensationActor != null) row = prepareCompensation(row, failure.compensationActor, false);
+        if (row.getSequenceNo() != Math.addExact(channel.getInboundSequence(), 1L))
+            throw conflict("协作消息序号已经被通道消费", "COLLAB_MESSAGE_SEQUENCE_DUPLICATE");
+        row.setAttemptCount((row.getAttemptCount() == null ? 0 : row.getAttemptCount()) + 1);
+        fail(row, failure.code, failure.summary);
+        return toView(mapper.selectById(row.getMessageId()));
     }
 
     /**
@@ -269,11 +349,11 @@ public class WorkflowCollaborationMessageService
         }
         catch (ServiceException exception)
         {
-            fail(row, exception.getSubCode() == null ? "COLLAB_MESSAGE_DELIVERY_FAILED" : exception.getSubCode(), exception.getMessage());
+            throw new DeliveryFailure(row, exception.getSubCode() == null ? "COLLAB_MESSAGE_DELIVERY_FAILED" : exception.getSubCode(), exception.getMessage(), exception, null);
         }
         catch (RuntimeException exception)
         {
-            fail(row, "COLLAB_MESSAGE_DELIVERY_FAILED", "Flowable 消息消费失败");
+            throw new DeliveryFailure(row, "COLLAB_MESSAGE_DELIVERY_FAILED", "Flowable 消息消费失败", exception, null);
         }
         WfCollaborationMessage completed = mapper.selectById(row.getMessageId());
         return toView(completed == null ? row : completed);
@@ -484,5 +564,27 @@ public class WorkflowCollaborationMessageService
     private String correlationType(WfCollaborationMessage row) { return row.getCorrelationKey() == null ? "PROCESS_INSTANCE" : "BUSINESS_KEY"; }
     private String correlationValue(WfCollaborationMessage row) { return row.getCorrelationKey() == null ? row.getTargetProcessInstanceId() : row.getCorrelationKey(); }
     private record DeclaredTarget(String elementId, boolean receiveTask) { }
+    private static final class DeliveryFailure extends RuntimeException
+    {
+        private final WfCollaborationMessage row;
+        private final String code;
+        private final String summary;
+        private final String compensationActor;
+
+        private DeliveryFailure(WfCollaborationMessage row, String code, String summary,
+                RuntimeException cause, String compensationActor)
+        {
+            super(summary, cause);
+            this.row = row;
+            this.code = code;
+            this.summary = summary;
+            this.compensationActor = compensationActor;
+        }
+
+        private DeliveryFailure withCompensationActor(String actor)
+        {
+            return new DeliveryFailure(row, code, summary, this, actor);
+        }
+    }
     private record Normalized(String messageId, String messageName, String sourceProcessDefinitionKey, String targetProcessDefinitionKey, String correlationKey, String targetProcessInstanceId, String correlationType, String correlationValue, long sequenceNo, Map<String,Object> variables, String variablesJson, String payloadSha256, int maxAttempts) { }
 }

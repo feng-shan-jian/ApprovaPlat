@@ -1,0 +1,20 @@
+{
+  "BrowserControlled": [
+    "workflow-page-reuse.spec.js",
+    "workflow-observation.spec.js",
+    "workflow-draft-attachments.spec.js",
+    "request-ownership.spec.js",
+    "integration-credential-ownership.spec.js",
+    "upload-settlement.spec.js",
+    "component-initialization.spec.js",
+    "component-credentials.spec.js",
+    "component-request-ownership.spec.js",
+    "designer-edit-session.spec.js",
+    "designer-identity-wiring.spec.js"
+  ],
+  "BrowserReal": [
+    "workflow-business-boundaries.spec.js",
+    "workflow-rule-authority.spec.js",
+    "workflow-drafts.spec.js"
+  ]
+}

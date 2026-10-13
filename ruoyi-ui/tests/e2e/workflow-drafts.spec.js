@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures/real-database-test.js'
+import { randomUUID } from 'node:crypto'
 
 // 真实登录、HTTP、部署与持久化测试；不会用路由 mock 替代后端。
 test('浏览器保存、重载、CAS 冲突和两个 HTTP 提交只创建一个实例', async ({ page }) => {
@@ -22,10 +23,14 @@ test('浏览器保存、重载、CAS 冲突和两个 HTTP 提交只创建一个�
     expect(result.code, `${method} ${path}: ${result.msg}`).toBe(expectedCode)
     return result
   }
-  const key = `draft_e2e_${Date.now()}`
-  const category = (await api('/workflow/category/listAll')).data[0].code
-  let modelId, deploymentId, draftId, instanceId
+  const key = `draft_e2e_${randomUUID().replaceAll('-', '')}`
+  const category = key
+  let categoryId, modelId, deploymentId, draftId, instanceId
   try {
+    await api('/workflow/category', 'POST', { code: category, categoryName: '草稿独立回归分类' })
+    const categories = (await api(`/workflow/category/list?code=${category}`)).rows.filter(row => row.code === category)
+    expect(categories).toHaveLength(1)
+    categoryId = categories[0].categoryId
     const model = (await api('/workflow/model', 'POST', { modelKey: key, modelName: '草稿整链回归', category, formType: 2 })).data
     modelId = model.modelId
     const revision = (await api(`/workflow/model/${modelId}`)).data.revision
@@ -80,6 +85,7 @@ test('浏览器保存、重载、CAS 冲突和两个 HTTP 提交只创建一个�
     }
     if (deploymentId) await api(`/workflow/deploy/${deploymentId}`, 'DELETE')
     if (modelId) await api(`/workflow/model/${modelId}`, 'DELETE')
+    if (categoryId) await api(`/workflow/category/${categoryId}`, 'DELETE')
   }
 })
 

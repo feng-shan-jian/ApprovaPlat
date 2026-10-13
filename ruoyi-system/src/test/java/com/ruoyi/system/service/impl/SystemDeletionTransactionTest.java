@@ -1,5 +1,7 @@
 package com.ruoyi.system.service.impl;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
+
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -161,7 +163,7 @@ class SystemDeletionTransactionTest
             if (mysql)
             {
                 assumeTrue(url != null && !url.isBlank(), "MySQL test environment is not configured");
-                assertTrue(url.matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?"));
+                WorkflowMysqlTargetGuard.verify(url);
             }
             DriverManagerDataSource source = mysql
                     ? new DriverManagerDataSource(url, System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"),

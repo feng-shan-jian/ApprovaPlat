@@ -157,14 +157,23 @@ The view below shows a dynamic multi-instance approval completed in a real front
 
 ### First-time development
 
-Start the local MySQL 8 and Redis services from the repository root:
+Set the existing development environment's connection values in the current PowerShell process:
+
+```powershell
+$env:APPROVAPLAT_MYSQL_VOLUME = '<existing volume name, or a new name for first use>'
+$env:APPROVAPLAT_MYSQL_ROOT_PASSWORD = '<administrator password for this instance>'
+$env:RUOYI_DB_USERNAME = '<development account other than root>'
+$env:RUOYI_DB_PASSWORD = '<development account password>'
+```
+
+For an existing volume, use its existing credentials. These variables create accounts only when initializing an empty volume; they do not change existing MySQL accounts. Start MySQL 8 and Redis from the repository root:
 
 ```powershell
 docker compose up -d
 docker compose ps
 ```
 
-When the `approvaplat-mysql-data` volume is first created, MySQL runs the [initialization script](docker/mysql/init.sh). Wait until both MySQL and Redis report `healthy` in `docker compose ps` before starting the application. An existing volume is not initialized again.
+When the selected volume is initialized for the first time, MySQL runs the [initialization script](docker/mysql/init.sh). Wait until both MySQL and Redis report `healthy` in `docker compose ps` before starting the application. An existing volume is not initialized again.
 
 Install the frontend dependencies:
 
@@ -173,7 +182,7 @@ Set-Location ruoyi-ui
 npm ci
 ```
 
-Open `ruoyi-admin` in IDEA and run `RuoYiApplication`. Local development does not require database, Druid Monitor, or upload-directory environment variables.
+Set the same `RUOYI_DB_USERNAME` and `RUOYI_DB_PASSWORD` in the IDEA run configuration, then run `RuoYiApplication` from `ruoyi-admin`. An already running IDEA process does not inherit variables set later in PowerShell. Druid Monitor and the upload directory can use their defaults.
 
 Start the frontend from `ruoyi-ui`:
 
@@ -205,9 +214,15 @@ Use the following command for a normal stop:
 docker compose down
 ```
 
-Local MySQL uses `127.0.0.1:3306`, database `approvaplat`, username `root`, and password `root123`. Redis uses `127.0.0.1:6379` without a password. The default upload directory is `${user.home}/.approvaplat/uploads`.
+The application and verification share local MySQL at `127.0.0.1:13306/approvaplat`. Supply the application credentials through `RUOYI_DB_USERNAME` and `RUOYI_DB_PASSWORD` in the current process. Compose additionally requires the explicitly approved `APPROVAPLAT_MYSQL_VOLUME` and `APPROVAPLAT_MYSQL_ROOT_PASSWORD`. Initialization is for an approved empty volume only; never replay it over existing data. Redis uses `127.0.0.1:6379` without a password. The default upload directory is `${user.home}/.approvaplat/uploads`. Database verification also requires the instance registration and explicit per-run opt-in described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Druid Monitor is disabled by default. To enable it temporarily, set `DRUID_MONITOR_ENABLED=true`, open `http://localhost:8080/druid/`, and sign in with local username `ap` and password `123456`.
+
+### Upgrading existing data
+
+The runtime reads only v2 workflow artifacts. If an existing database contains v1 deployment resources, stop the application and follow the [artifact migration guide (Chinese)](docs/workflow-artifact-v2-migration.md) to inspect, back up, and migrate them before starting the new version. Do not replay empty-database initialization SQL over business data.
+
+See the [architecture guide](docs/architecture.md) for current module responsibilities and transaction boundaries, and the [verification history](docs/verification-history.md) for completed checks and their scope. Both documents are in Chinese.
 
 ## Development and testing
 

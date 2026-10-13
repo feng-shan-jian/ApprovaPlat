@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.process;
 
+import com.ruoyi.common.testsupport.WorkflowMysqlTargetGuard;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
@@ -441,7 +442,7 @@ class WorkflowRuntimeFactReuseIntegrationTest
         if (database.equals("h2")) return WorkflowFlowableEngineTestSupport.start("runtime-facts", beans);
         String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
         Assumptions.assumeTrue(url != null && !url.isBlank(), "isolated MySQL fixture required");
-        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
+        WorkflowMysqlTargetGuard.verify(url);
         return WorkflowFlowableEngineTestSupport.start(new DriverManagerDataSource(url,
                 System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD")), beans);
     }
